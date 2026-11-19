@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pairings delivery experiment</title>
+<style>
+  body { max-width: 52rem; margin: 3rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; color: #162027; background: #f4f7f8; }
+  h1 { line-height: 1.15; }
+  form { display: grid; gap: .6rem; }
+  input { display: block; box-sizing: border-box; width: 100%; padding: .5rem; font: inherit; }
+  button { justify-self: start; padding: .5rem .85rem; font: inherit; }
+  table { width: 100%; margin-top: 1rem; border-collapse: collapse; background: white; }
+  td, th { padding: .6rem; text-align: left; border-bottom: 1px solid #d6e0e3; }
+</style>
+<main>
+  <h1>Pairings delivery experiment</h1>
+  <form>
+    <label>Raw GitHub JSON URL <input type="url" name="raw" required></label>
+    <button>Check for an update</button>
+  </form>
+  <table>
+    <thead><tr><th scope="col">Delivery path</th><th scope="col">Revision</th><th scope="col">Pairings</th><th scope="col">Request</th></tr></thead>
+    <tbody aria-live="polite"></tbody>
+  </table>
+</main>
+<script type="module">
+  import { deliveryPaths, readRevision } from "./delivery.js";
+  const form = document.querySelector("form");
+  const input = form.elements.namedItem("raw");
+  const button = form.querySelector("button");
+  const results = document.querySelector("tbody");
+  const pagesUrl = new URL("./pairings.json", location.href);
+  input.value = new URL(location.href).searchParams.get("raw") ?? "";
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    results.replaceChildren();
+    await Promise.all(deliveryPaths(pagesUrl, input.value).map(async (path) => {
+      const row = results.insertRow();
+      row.insertCell().textContent = path.name;
+      const revision = row.insertCell();
+      const pairings = row.insertCell();
+      const request = row.insertCell();
+      request.textContent = "Checking…";
+      try {
+        const result = await readRevision(path);
+        revision.textContent = result.revision ?? "Unavailable";
+        pairings.textContent = result.pairings?.map(({ table, players }) =>
+          `Table ${table}: ${players.join(" / ")}`).join("; ") ?? "";
+        request.textContent = result.requestMs === undefined
+          ? `HTTP ${result.http}`
+          : `${result.requestMs} ms`;
+      } catch (error) {
+        revision.textContent = "Unavailable";
+        request.textContent = error.message;
+      }
+    }));
+    button.disabled = false;
+  });
+  if (input.value && form.checkValidity()) form.requestSubmit();
+</script>
+</html>
