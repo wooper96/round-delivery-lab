@@ -9,6 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
@@ -29,13 +30,42 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/configure-pages@v5
+      - name: Validate benchmark pairing data
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = Path('freshness-bench')
+          expected = json.loads((data / 'index.json').read_text())['events']
+          for name in ('alpha', 'beta'):
+              event = json.loads((data / f'{name}.json').read_text())
+              assert event['revision'] == expected[name]
+              assert len({player for pair in event['pairings'] for player in pair['players']}) == 4
+          PY
       - name: Identify the custom deployment in its artifact
         run: |
           mkdir -p freshness-bench
           printf '{"commit":"%s"}\n' "$GITHUB_SHA" > freshness-bench/workflow.json
       - uses: actions/upload-pages-artifact@v4
+        id: upload
         with:
           path: .
+      - name: Wait for the uploaded Pages artifact to be listed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+        run: |
+          test -n "$ARTIFACT_ID"
+          for attempt in 1 2 3 4 5; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+                --jq '.artifacts[] | select(.name == "github-pages" and .expired == false) | .id' \
+                | grep -Fxq "$ARTIFACT_ID"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'GitHub did not list the uploaded Pages artifact' >&2
+          exit 1
       - name: Verify the test commit still leads main
         id: branch
         env:
