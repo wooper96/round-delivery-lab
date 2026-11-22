@@ -29,6 +29,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/configure-pages@v5
+      - name: Identify the custom deployment in its artifact
+        run: |
+          mkdir -p freshness-bench
+          printf '{"commit":"%s"}\n' "$GITHUB_SHA" > freshness-bench/workflow.json
       - uses: actions/upload-pages-artifact@v4
         with:
           path: .
