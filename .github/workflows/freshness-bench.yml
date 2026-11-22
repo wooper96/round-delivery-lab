@@ -1,0 +1,47 @@
+name: Disposable Pages freshness benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'freshness-bench/**'
+      - '.github/workflows/freshness-bench.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: disposable-pages-freshness
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: .
+      - name: Verify the test commit still leads main
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy benchmark site
+        if: steps.branch.outputs.current == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
