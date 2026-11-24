@@ -2,6 +2,7 @@ const { setTimeout: sleep } = require("node:timers/promises");
 
 const deployments = "/repos/{owner}/{repo}/pages/deployments";
 const deployment = `${deployments}/{pages_deployment_id}`;
+const pollIntervalMs = 5000;
 const terminalFailures = new Set([
   "deployment_cancelled",
   "deployment_content_failed",
@@ -9,6 +10,27 @@ const terminalFailures = new Set([
   "deployment_lost",
   "deployment_perms_error",
 ]);
+
+function statusRetryDelay(error, previousErrors) {
+  const { status, response } = error;
+  const headers = response?.headers ?? {};
+  const retryAfter = headers["retry-after"]?.trim();
+  const primaryLimitReached = headers["x-ratelimit-remaining"] === "0";
+  const rateLimited = status === 429 ||
+    (status === 403 && (retryAfter || primaryLimitReached || /\brate limit\b/i.test(error.message)));
+
+  if (!rateLimited && status !== 404 && !(status >= 500 && status < 600)) return null;
+
+  if (retryAfter) {
+    const delay = /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now();
+    if (!Number.isNaN(delay)) return Math.max(pollIntervalMs, delay);
+  }
+  if (rateLimited && primaryLimitReached) {
+    const reset = Number(headers["x-ratelimit-reset"]) * 1000;
+    if (reset > 0) return Math.max(pollIntervalMs, reset - Date.now());
+  }
+  return rateLimited ? 60_000 * 2 ** Math.min(previousErrors, 4) : pollIntervalMs;
+}
 
 async function deployPages(github, context, core, uploadedId, {
   cancellation = new AbortController().signal,
@@ -45,9 +67,12 @@ async function deployPages(github, context, core, uploadedId, {
         consecutiveErrors = 0;
       } catch (error) {
         signal.throwIfAborted();
-        const retryable = error.status === 404 || error.status === 429 || error.status >= 500;
-        if (!retryable || ++consecutiveErrors === 3) throw error;
+        const retryDelayMs = statusRetryDelay(error, consecutiveErrors);
+        if (retryDelayMs === null) throw error;
+        consecutiveErrors += 1;
         core.warning(`Unable to read the Pages deployment status (HTTP ${error.status}). Retrying.`);
+        await wait(Math.min(retryDelayMs, timeoutMs), undefined, { signal });
+        continue;
       }
       if (status !== undefined && status !== lastStatus) {
         core.info(`Pages deployment status: ${status}`);
@@ -61,7 +86,7 @@ async function deployPages(github, context, core, uploadedId, {
         finished = true;
         throw new Error(`The Pages deployment ended with status: ${status}.`);
       }
-      await wait(5000, undefined, { signal });
+      await wait(pollIntervalMs, undefined, { signal });
     }
   } finally {
     if (!finished) {
